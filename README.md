@@ -274,4 +274,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Built with ❤️ for Hackathon 2025**
+**Built with ❤️ for D3 Hackathon 2025**
