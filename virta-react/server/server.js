@@ -46,6 +46,7 @@ import("./workers/submissionWorker.js").catch((err) => {
 });
 
 const app = express();
+app.set("trust proxy", 1);
 const httpServer = createServer(app); // Changed 'server' to 'httpServer'
 
 // CORS configuration
