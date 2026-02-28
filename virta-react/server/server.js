@@ -46,7 +46,17 @@ import("./workers/submissionWorker.js").catch((err) => {
 });
 
 const app = express();
+
+// ==========================================
+// 🛡️ REVERSE PROXY CONFIGURATION (CRITICAL)
+// ==========================================
+// Render places a reverse proxy in front of this Node.js server.
+// Without this line, req.ip will always be the proxy's IP (e.g., 10.x.x.x), 
+// and `express-rate-limit` will crash with ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+// `1` means we trust the *first* hop proxy (Render) to set the X-Forwarded-For header.
+// DO NOT use `true` unless you control all network layers, as it allows IP spoofing.
 app.set("trust proxy", 1);
+
 const httpServer = createServer(app); // Changed 'server' to 'httpServer'
 
 // CORS configuration
@@ -123,6 +133,8 @@ const strictLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30, // Limit each IP to 30 requests per windowMs for these routes
   message: { success: false, message: "Too many requests, please try again later." },
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
 });
 app.use("/api/auth/", strictLimiter);
 app.use("/api/run-public", strictLimiter);
