@@ -7,6 +7,10 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { Server } from "socket.io";
 import dotenv from "dotenv";
+
+// Load environment variables IMMEDIATELY
+dotenv.config();
+
 import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db.js";
 import { createAdapter } from "@socket.io/redis-adapter";
@@ -20,9 +24,6 @@ import runPublicRoutes from "./routes/runPublic.js";
 import leaderboardRoutes from "./routes/leaderboard.js";
 
 import authRoutes from "./routes/auth.js";
-
-// Load environment variables
-dotenv.config();
 
 // Connect to MongoDB
 connectDB();
@@ -64,7 +65,7 @@ const io = new Server(httpServer, { // Changed 'server' to 'httpServer'
 const PORT = process.env.PORT || 3001;
 
 // Redis Adapter for WebSocket Scalability
-const pubClient = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
+const pubClient = createClient({ url: process.env.REDIS_URL });
 const subClient = pubClient.duplicate();
 
 Promise.all([pubClient.connect(), subClient.connect()]).then(() => {

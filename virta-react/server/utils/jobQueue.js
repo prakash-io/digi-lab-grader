@@ -6,9 +6,11 @@ let redisConnection;
 let queueInstance;
 
 try {
-  redisConnection = new Redis({
-    host: process.env.REDIS_HOST || "localhost",
-    port: process.env.REDIS_PORT || 6379,
+  if (!process.env.REDIS_URL) {
+    console.warn("⚠️ REDIS_URL is not provided. Worker queue may fail to connect.");
+  }
+
+  redisConnection = new Redis(process.env.REDIS_URL, {
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
     retryStrategy: (times) => {
