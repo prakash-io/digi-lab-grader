@@ -1,76 +1,53 @@
 import { createContext, useContext, useState, useEffect } from "react";
+import { api } from "../services/apiClient";
 
 const AuthContext = createContext();
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [token, setToken] = useState(localStorage.getItem("token") || null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // Check if user is authenticated on mount
+  // Check if user is authenticated on mount via HTTP Only Cookie
   useEffect(() => {
     const checkAuth = async () => {
-      const storedToken = localStorage.getItem("token");
-      if (storedToken) {
-        try {
-          const response = await fetch("http://localhost:3001/api/auth/verify", {
-            headers: {
-              Authorization: `Bearer ${storedToken}`,
-            },
-          });
+      try {
+        const response = await api.get("/api/auth/verify");
 
-          if (response.ok) {
-            const data = await response.json();
-            const userData = data.user;
-            
-            // Load user's purchased avatars and coins from localStorage
-            if (userData.id) {
-              const storedUserData = localStorage.getItem(`userData_${userData.id}`);
-              if (storedUserData) {
-                const { coins, purchasedAvatars } = JSON.parse(storedUserData);
-                userData.coins = coins;
-                userData.purchasedAvatars = purchasedAvatars;
-              }
-            }
-            
-            setUser(userData);
-            setToken(storedToken);
-          } else {
-            localStorage.removeItem("token");
-            setToken(null);
-          }
-        } catch (error) {
-          console.error("Auth check error:", error);
-          localStorage.removeItem("token");
-          setToken(null);
+        if (response.data.success) {
+          const userData = response.data.user;
+
+          setUser(userData);
+          setIsAuthenticated(true);
+        } else {
+          setUser(null);
+          setIsAuthenticated(false);
         }
+      } catch (error) {
+        console.error("Auth check error:", error);
+        setUser(null);
+        setIsAuthenticated(false);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     checkAuth();
   }, []);
 
-  const login = (userData, authToken) => {
-    // Load user's purchased avatars and coins from localStorage
-    if (userData.id) {
-      const storedUserData = localStorage.getItem(`userData_${userData.id}`);
-      if (storedUserData) {
-        const { coins, purchasedAvatars } = JSON.parse(storedUserData);
-        userData.coins = coins;
-        userData.purchasedAvatars = purchasedAvatars;
-      }
-    }
-    
+  const login = (userData) => {
     setUser(userData);
-    setToken(authToken);
-    localStorage.setItem("token", authToken);
+    setIsAuthenticated(true);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api.post("/api/auth/logout");
+    } catch (e) {
+      console.error("Logout error", e);
+    }
     setUser(null);
-    setToken(null);
-    localStorage.removeItem("token");
+    setIsAuthenticated(false);
   };
 
   const updateUser = async (updatedUserData) => {
@@ -82,7 +59,7 @@ export function AuthProvider({ children }) {
 
       // Update user in state
       setUser(updatedUserData);
-      
+
       // In a real app, you would make an API call here to update the user on the server
       // For now, we'll just update the local state
       // Example API call:
@@ -94,7 +71,7 @@ export function AuthProvider({ children }) {
       //   },
       //   body: JSON.stringify(updatedUserData),
       // });
-      
+
       return updatedUserData;
     } catch (error) {
       console.error("Error updating user:", error);
@@ -104,12 +81,11 @@ export function AuthProvider({ children }) {
 
   const value = {
     user,
-    token,
     loading,
     login,
     logout,
     updateUser,
-    isAuthenticated: !!user,
+    isAuthenticated,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

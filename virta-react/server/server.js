@@ -1,9 +1,16 @@
 import express from "express";
 import cors from "cors";
 import { createServer } from "http";
+import path, { dirname } from "path";
+import { fileURLToPath } from "url";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { Server } from "socket.io";
 import dotenv from "dotenv";
-import authRoutes from "./routes/auth.js";
+import cookieParser from "cookie-parser";
+import { connectDB } from "./config/db.js";
+import { createAdapter } from "@socket.io/redis-adapter";
+import { createClient } from "redis";
 import assignmentRoutes from "./routes/assignments.js";
 import submissionRoutes from "./routes/submissions.js";
 import announcementRoutes from "./routes/announcements.js";
@@ -12,8 +19,13 @@ import gradeRoutes from "./routes/grades.js";
 import runPublicRoutes from "./routes/runPublic.js";
 import leaderboardRoutes from "./routes/leaderboard.js";
 
+import authRoutes from "./routes/auth.js";
+
 // Load environment variables
 dotenv.config();
+
+// Connect to MongoDB
+connectDB();
 
 // Validate critical environment variables
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -33,14 +45,14 @@ import("./workers/submissionWorker.js").catch((err) => {
 });
 
 const app = express();
-const server = createServer(app);
+const httpServer = createServer(app); // Changed 'server' to 'httpServer'
 
 // CORS configuration
-const corsOrigins = process.env.CORS_ORIGINS 
+const corsOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map(origin => origin.trim())
   : ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"];
 
-const io = new Server(server, {
+const io = new Server(httpServer, { // Changed 'server' to 'httpServer'
   cors: {
     origin: corsOrigins,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -51,12 +63,23 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3001;
 
+// Redis Adapter for WebSocket Scalability
+const pubClient = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
+const subClient = pubClient.duplicate();
+
+Promise.all([pubClient.connect(), subClient.connect()]).then(() => {
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log("✅ Redis Adapter for WebSockets connected");
+}).catch(err => {
+  console.error("❌ Redis Adapter failed. Running in single-instance mode.", err.message);
+});
+
 // Middleware - CORS with proper preflight handling
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
+
     if (corsOrigins.indexOf(origin) !== -1 || corsOrigins.includes('*')) {
       callback(null, true);
     } else {
@@ -72,12 +95,43 @@ app.use(cors({
 // Handle preflight requests
 app.options('*', cors());
 
+// Define __dirname for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+app.use(express.static(path.join(__dirname, "public")));
+
+// Security Headers
+app.use(helmet());
+
+// Rate Limiting (General API)
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200, // Limit each IP to 200 requests per windowMs
+  message: { success: false, message: "Too many requests, please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Apply rate limiting to all API routes
+app.use("/api/", apiLimiter);
+
+// Specific stricter rate limit for Auth and Code Execution
+const strictLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30, // Limit each IP to 30 requests per windowMs for these routes
+  message: { success: false, message: "Too many requests, please try again later." },
+});
+app.use("/api/auth/", strictLimiter);
+app.use("/api/run-public", strictLimiter);
+
 app.use(express.json());
+app.use(cookieParser());
 
 // Health check - place early for easy access
 app.get("/api/health", (req, res) => {
-  res.json({ 
-    status: "ok", 
+  res.json({
+    status: "ok",
     message: "VirTA Backend API is running",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || "development"
@@ -86,8 +140,8 @@ app.get("/api/health", (req, res) => {
 
 // Root route
 app.get("/", (req, res) => {
-  res.json({ 
-    status: "ok", 
+  res.json({
+    status: "ok",
     message: "VirTA Backend API is running",
     endpoints: {
       health: "/api/health",
@@ -144,7 +198,7 @@ io.on("connection", (socket) => {
 app.locals.io = io;
 
 // Start server - bind to 0.0.0.0 for Railway deployment
-server.listen(PORT, '0.0.0.0', () => {
+httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server is running on http://0.0.0.0:${PORT}`);
   console.log(`📡 WebSocket server is ready`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);

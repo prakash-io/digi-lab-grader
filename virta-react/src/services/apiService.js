@@ -1,78 +1,65 @@
-// Base API URL - uses environment variable or falls back to localhost
-const getApiBaseUrl = () => {
-  const apiUrl = import.meta.env.VITE_API_URL;
-  if (apiUrl && apiUrl.trim()) {
-    const cleanUrl = apiUrl.trim().replace(/\/$/, '');
-    return `${cleanUrl}/api`;
-  }
-  return "http://localhost:3001/api";
-};
-
-const API_BASE_URL = getApiBaseUrl();
+import { api } from "./apiClient";
 
 // Assignments
 export const assignmentService = {
   async createAssignment(assignmentData) {
-    const response = await fetch(`${API_BASE_URL}/assignments`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(assignmentData),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      const error = new Error(data.message || "Failed to create assignment");
-      error.response = { data };
+    try {
+      const response = await api.post("/api/assignments", assignmentData);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to create assignment");
+      }
       throw error;
     }
-    return data;
   },
 
-  async getAssignments(role = "student") {
-    const response = await fetch(`${API_BASE_URL}/assignments?role=${role}`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to get assignments");
+  async getAssignments() {
+    try {
+      const response = await api.get("/api/assignments");
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get assignments");
+      }
+      throw error;
     }
-    return data;
   },
 
-  async getAssignment(id, role = "student") {
-    const response = await fetch(`${API_BASE_URL}/assignments/${id}?role=${role}`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to get assignment");
+  async getAssignment(id) {
+    try {
+      const response = await api.get(`/api/assignments/${id}`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get assignment");
+      }
+      throw error;
     }
-    return data;
   },
 
   async getAssignmentsByTeacher(teacherId) {
-    const response = await fetch(`${API_BASE_URL}/assignments/teacher/${teacherId}`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to get teacher assignments");
+    try {
+      const response = await api.get(`/api/assignments/teacher/${teacherId}`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get teacher assignments");
+      }
+      throw error;
     }
-    return data;
   },
 
   async updateAssignment(id, assignmentData) {
-    const response = await fetch(`${API_BASE_URL}/assignments/${id}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(assignmentData),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      const error = new Error(data.message || "Failed to update assignment");
-      error.response = { data };
+    try {
+      const response = await api.put(`/api/assignments/${id}`, assignmentData);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to update assignment");
+      }
       throw error;
     }
-    return data;
   },
 };
 
@@ -80,204 +67,182 @@ export const assignmentService = {
 export const submissionService = {
   async createSubmission(submissionData) {
     try {
-      const response = await fetch(`${API_BASE_URL}/submissions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(submissionData),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        // Provide more detailed error messages
-        const errorMessage = data.message || data.error || "Failed to create submission";
-        const error = new Error(errorMessage);
-        error.status = response.status;
-        throw error;
+      const response = await api.post("/api/submissions", submissionData);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || error.response.data.error || "Failed to create submission");
       }
-      return data;
-    } catch (err) {
-      // Re-throw with more context if it's a network error
-      if (err.name === "TypeError" && err.message.includes("fetch")) {
-        throw new Error("Network error: Could not connect to server. Please check your connection.");
-      }
-      throw err;
+      throw new Error("Network error: Could not connect to server.");
     }
   },
 
   async getSubmission(id) {
     try {
-      const response = await fetch(`${API_BASE_URL}/submissions/${id}`);
-      const data = await response.json();
-      if (!response.ok) {
-        const errorMessage = data.message || data.error || "Failed to get submission";
-        const error = new Error(errorMessage);
-        error.status = response.status;
-        throw error;
+      const response = await api.get(`/api/submissions/${id}`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || error.response.data.error || "Failed to get submission");
       }
-      return data;
-    } catch (err) {
-      // Re-throw with more context if it's a network error
-      if (err.name === "TypeError" && err.message.includes("fetch")) {
-        throw new Error("Network error: Could not connect to server. Please check your connection.");
-      }
-      throw err;
+      throw new Error("Network error: Could not connect to server.");
     }
   },
 
   async getSubmissionsByAssignment(assignmentId) {
-    const response = await fetch(`${API_BASE_URL}/submissions/assignment/${assignmentId}`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to get submissions");
+    try {
+      const response = await api.get(`/api/submissions/assignment/${assignmentId}`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get submissions");
+      }
+      throw error;
     }
-    return data;
   },
 
   async getSubmissionsByStudent(studentId) {
-    const response = await fetch(`${API_BASE_URL}/submissions/student/${studentId}`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to get student submissions");
+    try {
+      const response = await api.get(`/api/submissions/student/${studentId}`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get student submissions");
+      }
+      throw error;
     }
-    return data;
   },
 
   async updateSubmission(id, updates) {
-    const response = await fetch(`${API_BASE_URL}/submissions/${id}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(updates),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to update submission");
+    try {
+      const response = await api.put(`/api/submissions/${id}`, updates);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to update submission");
+      }
+      throw error;
     }
-    return data;
   },
 };
 
 // Announcements
 export const announcementService = {
   async createAnnouncement(announcementData) {
-    const response = await fetch(`${API_BASE_URL}/announcements`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(announcementData),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to create announcement");
+    try {
+      const response = await api.post("/api/announcements", announcementData);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to create announcement");
+      }
+      throw error;
     }
-    return data;
   },
 
   async getAnnouncements() {
-    const response = await fetch(`${API_BASE_URL}/announcements`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to get announcements");
+    try {
+      const response = await api.get("/api/announcements");
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get announcements");
+      }
+      throw error;
     }
-    return data;
   },
 };
 
 // Notifications
 export const notificationService = {
   async getNotifications(userId) {
-    const response = await fetch(`${API_BASE_URL}/notifications/user/${userId}`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to get notifications");
+    try {
+      const response = await api.get(`/api/notifications/user/${userId}`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get notifications");
+      }
+      throw error;
     }
-    return data;
   },
 
   async markAsRead(notificationId) {
-    const response = await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
-      method: "PUT",
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to mark notification as read");
+    try {
+      const response = await api.put(`/api/notifications/${notificationId}/read`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to mark notification as read");
+      }
+      throw error;
     }
-    return data;
   },
 
   async markAllAsRead(userId) {
-    const response = await fetch(`${API_BASE_URL}/notifications/user/${userId}/read-all`, {
-      method: "PUT",
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to mark all notifications as read");
+    try {
+      const response = await api.put(`/api/notifications/user/${userId}/read-all`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to mark all notifications as read");
+      }
+      throw error;
     }
-    return data;
   },
 };
 
 // Run Public Tests
 export const runPublicService = {
   async runPublicTests(assignmentId, code, language) {
-    const response = await fetch(`${API_BASE_URL}/run-public`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ assignmentId, code, language }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to run public tests");
+    try {
+      const response = await api.post("/api/run-public", { assignmentId, code, language });
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to run public tests");
+      }
+      throw error;
     }
-    return data;
   },
 };
 
 // Grades
 export const gradeService = {
   async createOrUpdateGrade(gradeData) {
-    const response = await fetch(`${API_BASE_URL}/grades`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(gradeData),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to save grade");
+    try {
+      const response = await api.post("/api/grades", gradeData);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to save grade");
+      }
+      throw error;
     }
-    return data;
   },
 
   async getGradesByAssignment(assignmentId) {
-    const response = await fetch(`${API_BASE_URL}/grades/assignment/${assignmentId}`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to get grades");
+    try {
+      const response = await api.get(`/api/grades/assignment/${assignmentId}`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get grades");
+      }
+      throw error;
     }
-    return data;
   },
 
   async getGradesByStudent(studentId) {
-    const response = await fetch(`${API_BASE_URL}/grades/student/${studentId}`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to get student grades");
+    try {
+      const response = await api.get(`/api/grades/student/${studentId}`);
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get student grades");
+      }
+      throw error;
     }
-    return data;
   },
 };
 
@@ -285,18 +250,13 @@ export const gradeService = {
 export const leaderboardService = {
   async getLeaderboard() {
     try {
-      const response = await fetch(`${API_BASE_URL}/leaderboard`);
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to get leaderboard");
+      const response = await api.get("/api/leaderboard");
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.message || "Failed to get leaderboard");
       }
-      return data;
-    } catch (err) {
-      if (err.name === "TypeError" && err.message.includes("fetch")) {
-        throw new Error("Network error: Could not connect to server. Please check your connection.");
-      }
-      throw err;
+      throw new Error("Network error: Could not connect to server.");
     }
   },
 };
-

@@ -1,15 +1,9 @@
 import express from "express";
-import {
-  createSubmission,
-  getSubmissionsByAssignment,
-  getSubmissionsByStudent,
-  getSubmissionById,
-  updateSubmission,
-} from "../utils/dataStorage.js";
+import { requireAuth } from "../middleware/auth.js";
 import { submissionSchema } from "../utils/validation.js";
 import { submissionQueue, setJobStatus, isQueueReady } from "../utils/jobQueue.js";
-import { getAssignmentById } from "../utils/dataStorage.js";
-import { v4 as uuidv4 } from "uuid";
+import Assignment from "../models/Assignment.js";
+import Submission from "../models/Submission.js";
 import { runCodeInSandbox, compareOutputs } from "../utils/sandbox.js";
 import {
   analyzeComplexity,
@@ -21,14 +15,13 @@ import {
 import { createOrUpdateGrade, updateUserScoreForAssignment } from "../utils/dataStorage.js";
 
 // Fallback function to process submission synchronously (when Redis is not available)
-async function processSubmissionSynchronously(submission, data) {
+async function processSubmissionSynchronously(submissionDoc, data) {
   try {
-    updateSubmission(submission.id, {
-      status: "processing",
-    });
+    submissionDoc.status = "processing";
+    await submissionDoc.save();
 
     // Fetch assignment
-    const assignment = getAssignmentById(data.assignmentId);
+    const assignment = await Assignment.findById(data.assignmentId).lean();
     if (!assignment) {
       throw new Error("Assignment not found");
     }
@@ -36,7 +29,7 @@ async function processSubmissionSynchronously(submission, data) {
     // Run public test cases
     const publicTestResults = [];
     const publicTestCases = assignment.publicTestCases || [];
-    
+
     for (let i = 0; i < publicTestCases.length; i++) {
       const testCase = publicTestCases[i];
       const result = await runCodeInSandbox({
@@ -65,7 +58,7 @@ async function processSubmissionSynchronously(submission, data) {
     // Run hidden test cases
     const hiddenTestResults = [];
     const hiddenTestCases = assignment.hiddenTestCases || [];
-    
+
     for (let i = 0; i < hiddenTestCases.length; i++) {
       const testCase = hiddenTestCases[i];
       const result = await runCodeInSandbox({
@@ -127,19 +120,19 @@ async function processSubmissionSynchronously(submission, data) {
       : 0;
 
     // Update submission with results
-    updateSubmission(submission.id, {
-      status: "graded",
-      results,
-      runtime: avgRuntime,
-      graded: true,
-      grade: totalScore * 10, // Convert to 0-100 scale
-    });
-
-    // Create or update grade
     const gradeScore = totalScore * 10; // Convert to 0-100 scale
+
+    submissionDoc.status = "graded";
+    submissionDoc.results = results;
+    submissionDoc.runtime = avgRuntime;
+    submissionDoc.graded = true;
+    submissionDoc.grade = gradeScore;
+    await submissionDoc.save();
+
+    // Create or update grade (Leaving legacy func here, ideally it goes to Mongo too)
     createOrUpdateGrade({
       assignmentId: data.assignmentId,
-      submissionId: submission.id,
+      submissionId: submissionDoc._id.toString(),
       studentId: data.studentId,
       grade: gradeScore,
       runtime: avgRuntime,
@@ -151,11 +144,10 @@ async function processSubmissionSynchronously(submission, data) {
     updateUserScoreForAssignment(data.studentId, data.assignmentId, gradeScore);
   } catch (error) {
     console.error("Synchronous processing error:", error);
-    updateSubmission(submission.id, {
-      status: "error",
-      error: error.message,
-      graded: false,
-    });
+    submissionDoc.status = "error";
+    submissionDoc.error = error.message;
+    submissionDoc.graded = false;
+    await submissionDoc.save();
     throw error;
   }
 }
@@ -163,11 +155,11 @@ async function processSubmissionSynchronously(submission, data) {
 const router = express.Router();
 
 // Create submission (Student) - Enqueue for grading
-router.post("/", async (req, res) => {
+router.post("/", requireAuth, async (req, res) => {
   try {
     // Validate request
     const validationResult = submissionSchema.safeParse(req.body);
-    
+
     if (!validationResult.success) {
       return res.status(400).json({
         success: false,
@@ -179,18 +171,13 @@ router.post("/", async (req, res) => {
     const data = validationResult.data;
 
     // Verify assignment exists and language is allowed
-    const assignment = getAssignmentById(data.assignmentId);
+    const assignment = await Assignment.findById(data.assignmentId).lean();
     if (!assignment) {
-      return res.status(404).json({
-        success: false,
-        message: "Assignment not found",
-      });
+      return res.status(404).json({ success: false, message: "Assignment not found" });
     }
 
-    // Handle backward compatibility for old assignments
     let allowedLanguages = assignment.languages;
     if (!allowedLanguages || !Array.isArray(allowedLanguages)) {
-      // Default to python if no languages specified (old format)
       allowedLanguages = ["python"];
     }
 
@@ -201,158 +188,133 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Create submission
-    const submission = {
-      id: uuidv4(),
+    // Force studentId to be the authenticated user to prevent IDOR spoofing
+    const submission = await Submission.create({
       assignmentId: data.assignmentId,
-      studentId: data.studentId,
-      studentName: data.studentName || "Student",
+      studentId: req.user._id.toString(),
+      studentName: req.user.username,
       code: data.code,
       language: data.language,
-      status: "pending", // pending -> processing -> graded/error
-      submittedAt: new Date().toISOString(),
-      results: null,
-      error: null,
-    };
-
-    createSubmission(submission);
+      status: "pending",
+    });
 
     // Update submission status to processing
-    updateSubmission(submission.id, {
-      status: "processing",
-    });
+    submission.status = "processing";
+    await submission.save();
 
     // Enqueue job for grading
     try {
-      // Check if queue is available (Redis)
       if (submissionQueue && typeof submissionQueue.add === "function" && isQueueReady()) {
         try {
           const job = await submissionQueue.add("grade-submission", {
-            submissionId: submission.id,
+            submissionId: submission._id.toString(),
             assignmentId: data.assignmentId,
             code: data.code,
             language: data.language,
-            studentId: data.studentId,
+            studentId: req.user._id.toString(),
           }, {
-            jobId: submission.id,
+            jobId: submission._id.toString(),
             attempts: 3,
-            backoff: {
-              type: "exponential",
-              delay: 2000,
-            },
+            backoff: { type: "exponential", delay: 2000 },
           });
 
-          // Set initial job status
-          setJobStatus(submission.id, {
-            status: "processing",
-            jobId: job.id,
-          });
+          setJobStatus(submission._id.toString(), { status: "processing", jobId: job.id });
         } catch (queueError) {
-          // Handle connection closed or other queue errors
           if (queueError.message && queueError.message.includes("Connection is closed")) {
             console.error("Redis connection closed. Processing submission synchronously as fallback.");
-            // Fallback: Process submission synchronously
             await processSubmissionSynchronously(submission, data);
           } else {
             throw queueError;
           }
         }
       } else {
-        // If Redis is not available, process synchronously as fallback
         console.warn("Redis queue not available. Processing submission synchronously as fallback.");
         await processSubmissionSynchronously(submission, data);
       }
     } catch (queueError) {
       console.error("Error adding job to queue:", queueError);
-      // Fallback: Try to process synchronously
       try {
         await processSubmissionSynchronously(submission, data);
       } catch (syncError) {
-        // If synchronous processing also fails, mark as error
-        updateSubmission(submission.id, {
-          status: "error",
-          error: syncError.message || "Failed to process submission. Please try again.",
-        });
+        submission.status = "error";
+        submission.error = syncError.message || "Failed to process submission. Please try again.";
+        await submission.save();
       }
     }
 
-    // Get updated submission status (may be graded if processed synchronously)
-    const updatedSubmission = getSubmissionById(submission.id);
-    
+    // Get updated submission status
+    const updatedSubmission = await Submission.findById(submission._id).lean();
+
     res.status(201).json({
       success: true,
-      message: updatedSubmission?.status === "graded" 
-        ? "Submission created and graded successfully" 
+      message: updatedSubmission?.status === "graded"
+        ? "Submission created and graded successfully"
         : "Submission created and queued for grading",
       submission: {
-        id: submission.id,
+        id: updatedSubmission._id.toString(),
         status: updatedSubmission?.status || "pending",
-        submittedAt: submission.submittedAt,
+        submittedAt: updatedSubmission.createdAt,
         results: updatedSubmission?.results || null,
       },
     });
   } catch (error) {
     console.error("Create submission error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
-// Get submissions by assignment (Teacher)
-router.get("/assignment/:assignmentId", (req, res) => {
+// Get submissions by assignment
+router.get("/assignment/:assignmentId", requireAuth, async (req, res) => {
   try {
     const { assignmentId } = req.params;
-    const submissions = getSubmissionsByAssignment(assignmentId);
 
-    res.json({
-      success: true,
-      submissions: submissions.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt)),
-    });
+    // Quick authorization check: If student, they can only see THEIR submissions
+    let filter = { assignmentId };
+    if (req.user.userType === "student") {
+      filter.studentId = req.user._id.toString();
+    } // Instructors can see all logic
+
+    const submissions = await Submission.find(filter).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, submissions });
   } catch (error) {
     console.error("Get submissions error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
 // Get submissions by student
-router.get("/student/:studentId", (req, res) => {
+router.get("/student/:studentId", requireAuth, async (req, res) => {
   try {
     const { studentId } = req.params;
-    const submissions = getSubmissionsByStudent(studentId);
 
-    res.json({
-      success: true,
-      submissions: submissions.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt)),
-    });
+    // IDOR Check: Students can only query their own ID
+    if (req.user.userType === "student" && req.user._id.toString() !== studentId) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const submissions = await Submission.find({ studentId }).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, submissions });
   } catch (error) {
     console.error("Get student submissions error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
-// Get submission by ID (for polling status)
-router.get("/:id", async (req, res) => {
+// Get submission by ID
+router.get("/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const submission = getSubmissionById(id);
+    const submission = await Submission.findById(id).lean();
 
     if (!submission) {
-      return res.status(404).json({
-        success: false,
-        message: "Submission not found",
-      });
+      return res.status(404).json({ success: false, message: "Submission not found" });
     }
 
-    // Get job status from queue (if available)
+    // IDOR Check
+    if (req.user.userType === "student" && req.user._id.toString() !== submission.studentId) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
     let jobStatus = "unknown";
     let progress = 0;
 
@@ -366,77 +328,35 @@ router.get("/:id", async (req, res) => {
         }
       } catch (queueError) {
         console.warn("Error getting job status:", queueError.message);
-        // Continue with submission status from database
       }
     }
 
-    // Prepare response
     const response = {
-      id: submission.id,
+      id: submission._id.toString(),
       status: submission.status || jobStatus,
-      submittedAt: submission.submittedAt,
+      submittedAt: submission.createdAt,
       progress,
     };
 
-    // Include results if graded
     if (submission.status === "graded" && submission.results) {
       response.results = submission.results;
-      // Don't expose hidden test case details to students
-      if (submission.results.hiddenTestResults) {
-        response.results.hiddenTestResults = submission.results.hiddenTestResults.map((test) => ({
+      if (req.user.userType === "student" && response.results.hiddenTestResults) {
+        response.results.hiddenTestResults = response.results.hiddenTestResults.map((test) => ({
           passed: test.passed,
           executionTime: test.executionTime,
-          // Don't include input/output details for hidden tests
         }));
       }
     }
 
-    // Include error if failed
     if (submission.status === "error" || submission.error) {
       response.error = submission.error;
     }
 
-    res.json({
-      success: true,
-      submission: response,
-    });
+    res.json({ success: true, submission: response });
   } catch (error) {
     console.error("Get submission error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
-  }
-});
-
-// Update submission (e.g., update runtime)
-router.put("/:id", (req, res) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
-
-    const updated = updateSubmission(id, updates);
-
-    if (!updated) {
-      return res.status(404).json({
-        success: false,
-        message: "Submission not found",
-      });
-    }
-
-    res.json({
-      success: true,
-      message: "Submission updated successfully",
-      submission: getSubmissionById(id),
-    });
-  } catch (error) {
-    console.error("Update submission error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
 export default router;
-

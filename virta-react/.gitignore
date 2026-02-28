@@ -34,17 +34,5 @@ server/data/*.json
 server/.env
 server/node_modules
 
-# README files - exclude from git (prevents new README files from being added)
-README*.md
-**/README*.md
-DEPLOYMENT*.md
-FIX_*.md
-HACKATHON.md
-SETUP*.md
-WORKFLOW*.md
-TECHNICAL*.md
-SCALE*.md
-CONTRIBUTING.md
-DEPLOY_*.md
-*.md
-!LICENSE
+# Documentation files allowed
+!*.md

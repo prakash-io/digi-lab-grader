@@ -1,38 +1,26 @@
 import express from "express";
-import {
-  createAssignment,
-  getAssignmentById,
-  getAssignmentsByTeacher,
-  readAssignments,
-  updateAssignment,
-} from "../utils/dataStorage.js";
+import Assignment from "../models/Assignment.js";
+import { requireAuth, requireTeacher } from "../middleware/auth.js";
 import { assignmentSchema } from "../utils/validation.js";
-import { v4 as uuidv4 } from "uuid";
 
 const router = express.Router();
 
 // Create assignment (Teacher only)
-router.post("/", (req, res) => {
+router.post("/", requireAuth, requireTeacher, async (req, res) => {
   try {
-    // Validate with Zod
     const validationResult = assignmentSchema.safeParse(req.body);
-    
+
     if (!validationResult.success) {
-      console.error("Validation errors:", validationResult.error.errors);
       return res.status(400).json({
         success: false,
         message: "Validation error",
-        errors: validationResult.error.errors.map(err => ({
-          path: err.path.join('.'),
-          message: err.message,
-        })),
+        errors: validationResult.error.errors,
       });
     }
 
     const data = validationResult.data;
 
-    const assignment = {
-      id: uuidv4(),
+    const assignment = await Assignment.create({
       title: data.title,
       description: data.description,
       languages: data.languages,
@@ -42,201 +30,111 @@ router.post("/", (req, res) => {
       constraints: data.constraints || "",
       publicTestCases: data.publicTestCases,
       hiddenTestCases: data.hiddenTestCases || [],
-      teacherId: data.teacherId,
-      teacherName: data.teacherName || "Teacher",
+      teacherId: req.user._id.toString(), // Securely pulled from Auth token, not body
+      teacherName: req.user.username,
       dueDate: data.dueDate || null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    });
 
-    createAssignment(assignment);
-
-    // Emit to all students via WebSocket
     const io = req.app.locals.io;
     if (io) {
-      // Don't send hidden test cases to students
-      const studentAssignment = {
-        ...assignment,
-        hiddenTestCases: [], // Hide hidden test cases
-      };
+      const studentAssignment = { ...assignment.toObject(), hiddenTestCases: [] };
       io.to("all-students").emit("new-assignment", studentAssignment);
     }
 
-    res.status(201).json({
-      success: true,
-      message: "Assignment created successfully",
-      assignment,
-    });
+    res.status(201).json({ success: true, assignment });
   } catch (error) {
     console.error("Create assignment error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
-// Get all assignments (role-aware: students don't get hidden test cases)
-router.get("/", (req, res) => {
+// Get all assignments
+router.get("/", requireAuth, async (req, res) => {
   try {
-    const userRole = req.query.role || "student"; // Default to student
-    const assignments = readAssignments();
-    
+    const assignments = await Assignment.find().sort({ createdAt: -1 }).lean();
+
     // If student, remove hidden test cases
     const filteredAssignments = assignments.map((assignment) => {
-      if (userRole === "student") {
-        return {
-          ...assignment,
-          hiddenTestCases: [], // Hide hidden test cases from students
-        };
+      if (req.user.userType === "student") {
+        assignment.hiddenTestCases = [];
       }
       return assignment;
     });
 
-    res.json({
-      success: true,
-      assignments: filteredAssignments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
-    });
+    res.json({ success: true, assignments: filteredAssignments });
   } catch (error) {
     console.error("Get assignments error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
-// Get assignment by ID (role-aware)
-router.get("/:id", (req, res) => {
+// Get assignment by ID
+router.get("/:id", requireAuth, async (req, res) => {
   try {
-    const { id } = req.params;
-    const userRole = req.query.role || "student";
-    const assignment = getAssignmentById(id);
+    const assignment = await Assignment.findById(req.params.id).lean();
 
     if (!assignment) {
-      return res.status(404).json({
-        success: false,
-        message: "Assignment not found",
-      });
+      return res.status(404).json({ success: false, message: "Assignment not found" });
     }
 
-    // If student, remove hidden test cases
-    const filteredAssignment = userRole === "student"
-      ? { ...assignment, hiddenTestCases: [] }
-      : assignment;
+    if (req.user.userType === "student") {
+      assignment.hiddenTestCases = [];
+    }
 
-    res.json({
-      success: true,
-      assignment: filteredAssignment,
-    });
+    res.json({ success: true, assignment });
   } catch (error) {
-    console.error("Get assignment error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
 // Get assignments by teacher
-router.get("/teacher/:teacherId", (req, res) => {
+router.get("/teacher/:teacherId", requireAuth, requireTeacher, async (req, res) => {
   try {
-    const { teacherId } = req.params;
-    const assignments = getAssignmentsByTeacher(teacherId);
+    // A teacher can only view their own assignments to fix IDOR
+    if (req.user._id.toString() !== req.params.teacherId) {
+      return res.status(403).json({ success: false, message: "Cannot view other teacher's assignments" });
+    }
 
-    res.json({
-      success: true,
-      assignments: assignments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
-    });
+    const assignments = await Assignment.find({ teacherId: req.params.teacherId }).sort({ createdAt: -1 });
+    res.json({ success: true, assignments });
   } catch (error) {
-    console.error("Get teacher assignments error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
-// Update assignment (Teacher only)
-router.put("/:id", (req, res) => {
+// Update assignment
+router.put("/:id", requireAuth, requireTeacher, async (req, res) => {
   try {
-    const { id } = req.params;
-    
-    // Check if assignment exists
-    const existingAssignment = getAssignmentById(id);
-    if (!existingAssignment) {
-      return res.status(404).json({
-        success: false,
-        message: "Assignment not found",
-      });
-    }
-
-    // Validate with Zod (but make id optional for update)
     const validationResult = assignmentSchema.safeParse(req.body);
-    
+
     if (!validationResult.success) {
-      console.error("Validation errors:", validationResult.error.errors);
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: validationResult.error.errors.map(err => ({
-          path: err.path.join('.'),
-          message: err.message,
-        })),
-      });
+      return res.status(400).json({ success: false, errors: validationResult.error.errors });
     }
 
-    const data = validationResult.data;
+    // Ensure they own the assignment
+    const existing = await Assignment.findById(req.params.id);
+    if (!existing) return res.status(404).json({ success: false, message: "Not found" });
 
-    // Update assignment (preserve id and createdAt)
-    const updatedAssignment = {
-      ...existingAssignment,
-      title: data.title,
-      description: data.description,
-      languages: data.languages,
-      timeLimit: data.timeLimit,
-      memoryLimit: data.memoryLimit,
-      ioSpec: data.ioSpec || {},
-      constraints: data.constraints || "",
-      publicTestCases: data.publicTestCases,
-      hiddenTestCases: data.hiddenTestCases || [],
-      dueDate: data.dueDate || null,
-      updatedAt: new Date().toISOString(),
-    };
-
-    const success = updateAssignment(id, updatedAssignment);
-    
-    if (!success) {
-      return res.status(500).json({
-        success: false,
-        message: "Failed to update assignment",
-      });
+    if (existing.teacherId !== req.user._id.toString()) {
+      return res.status(403).json({ success: false, message: "Unauthorized to edit this assignment" });
     }
 
-    // Emit update to all students via WebSocket
+    const updatedAssignment = await Assignment.findByIdAndUpdate(
+      req.params.id,
+      { ...validationResult.data, teacherId: req.user._id.toString() },
+      { new: true }
+    );
+
     const io = req.app.locals.io;
     if (io) {
-      // Don't send hidden test cases to students
-      const studentAssignment = {
-        ...updatedAssignment,
-        hiddenTestCases: [], // Hide hidden test cases
-      };
+      const studentAssignment = { ...updatedAssignment.toObject(), hiddenTestCases: [] };
       io.to("all-students").emit("assignment-updated", studentAssignment);
     }
 
-    res.json({
-      success: true,
-      message: "Assignment updated successfully",
-      assignment: updatedAssignment,
-    });
+    res.json({ success: true, assignment: updatedAssignment });
   } catch (error) {
-    console.error("Update assignment error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
 export default router;
-
