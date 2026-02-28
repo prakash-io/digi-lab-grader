@@ -1,13 +1,20 @@
 import axios from "axios";
 
-// Create an instance of axios that always sends and receives cookies
-export const api = axios.create({
-    baseURL: "http://localhost:3001", // Backend URL
+// Get API URL - uses environment variable or falls back to localhost for development
+const getApiUrl = () => {
+    if (import.meta.env.VITE_API_URL) {
+        return import.meta.env.VITE_API_URL;
+    }
+    return "http://localhost:3001";
+};
+
+const apiClient = axios.create({
+    baseURL: getApiUrl(),
     withCredentials: true, // Crucial for sending/receiving httpOnly cookies
 });
 
 // Optionally add an interceptor for global error handling
-api.interceptors.response.use(
+apiClient.interceptors.response.use(
     (response) => response,
     (error) => {
         // If the server says we're unauthorized, we might want to auto-logout
@@ -18,3 +25,5 @@ api.interceptors.response.use(
         return Promise.reject(error);
     }
 );
+
+export const api = apiClient;
