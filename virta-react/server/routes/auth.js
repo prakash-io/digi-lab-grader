@@ -5,14 +5,19 @@ import User from "../models/User.js";
 import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error("❌ CRITICAL: JWT_SECRET environment variable is missing.");
+  process.exit(1);
+}
 
 // Helper to set cookie
 const setTokenCookie = (res, token) => {
+  const isProduction = process.env.NODE_ENV === "production";
   res.cookie("token", token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    secure: isProduction, // HTTPS only in production
+    sameSite: isProduction ? "none" : "strict", // "none" required for cross-domain (Vercel→Render)
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   });
 };
